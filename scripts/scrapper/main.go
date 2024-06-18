@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +32,7 @@ type Result struct {
 	Title  string `json:"title"`
 	Player string `json:"player"`
 	Rank   string `json:"rank"`
-	Deck   *Deck  `json:"-"`
+	Deck   *Deck  `json:"deck"`
 }
 
 type Event struct {
@@ -175,13 +179,61 @@ func main() {
 			return
 		}
 
-		fmt.Println(event.Level, event.Date, event.Title)
 		err = os.MkdirAll(
 			"data/edh/2024/"+
 				strings.ReplaceAll(event.Date, "/", "-")+
 				"-"+event.ID,
 			0755,
 		)
+
+		for _, result := range event.Results {
+			res, err := http.Get("https://www.mtgtop8.com/mtgo?d=" + result.ID)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			bb, err := io.ReadAll(res.Body)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			_ = res.Body.Close()
+
+			d := &Deck{
+				Commanders: []string{},
+				List:       []DeckElement{},
+			}
+
+			sideboardPass := false
+			splittedContent := bytes.Split(bb, []byte{13, 10})
+			for _, line := range splittedContent {
+				strLine := string(line)
+				if strLine == "Sideboard" {
+					sideboardPass = true
+					continue
+				}
+
+				splittedLine1, splittedLine2, ok := bytes.Cut(line, []byte{32})
+				if ok {
+					if sideboardPass {
+						d.Commanders = append(d.Commanders, string(splittedLine2))
+					}
+
+					q, _ := strconv.Atoi(string(splittedLine1))
+					d.List = append(d.List, DeckElement{
+						Quantity:    q,
+						Name:        string(splittedLine2),
+						IsCommander: sideboardPass,
+					})
+				}
+			}
+
+			sideboardPass = false
+
+			result.Deck = d
+		}
 
 		bb, err := json.Marshal(event)
 		if err != nil {
@@ -197,24 +249,6 @@ func main() {
 			strings.ReplaceAll(event.Date, "/", "-")+
 			"-"+event.ID+"/index.json")
 
-		//for id, result := range event.Results {
-		//	fmt.Println(id, result.Rank, result.Title, result.Player)
-		//	res, err := http.Get("https://www.mtgtop8.com/mtgo?d=" + id)
-		//	if err != nil {
-		//		fmt.Println(err)
-		//		return
-		//	}
-		//
-		//	bb, err := io.ReadAll(res.Body)
-		//	if err != nil {
-		//		fmt.Println(err)
-		//		return
-		//	}
-		//
-		//	_ = res.Body.Close()
-		//
-		//	fmt.Println(string(bb))
-		//}
 	}
 
 	bb, err := json.Marshal(ee)
